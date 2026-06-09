@@ -146,6 +146,7 @@ export default function App() {
           userLocation={userLocation}
           selected={selected}
           onSelect={handleSelect}
+          onLocate={setUserLocation}
         />
         {(selected || loadingDetail) && (
           <WorkshopDetail

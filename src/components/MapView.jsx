@@ -1,8 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useRoute } from '../hooks/useRoute'
+import { Navigation } from 'lucide-react'
 
 // Fix default icon path broken by Vite bundling
 delete L.Icon.Default.prototype._getIconUrl
@@ -58,6 +59,15 @@ function FlyTo({ target }) {
   return null
 }
 
+// Fly to user location after locate button
+function FlyToUser({ location }) {
+  const map = useMap()
+  useEffect(() => {
+    if (location) map.flyTo([location.lat, location.lng], 15, { duration: 1.2 })
+  }, [location, map])
+  return null
+}
+
 // Fit map bounds to show full route
 function FitRoute({ coordinates, userLocation, selected }) {
   const map = useMap()
@@ -73,12 +83,28 @@ function FitRoute({ coordinates, userLocation, selected }) {
   return null
 }
 
-export default function MapView({ workshops, userLocation, selected, onSelect }) {
+export default function MapView({ workshops, userLocation, selected, onSelect, onLocate }) {
+  const [locating, setLocating] = useState(false)
   const center = userLocation
     ? [userLocation.lat, userLocation.lng]
     : [-6.2088, 106.8456]
 
   const { route, loadingRoute } = useRoute(userLocation, selected)
+
+  function handleLocate() {
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        onLocate({ lat: coords.latitude, lng: coords.longitude })
+        setLocating(false)
+      },
+      (err) => {
+        console.warn('GPS error:', err)
+        setLocating(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
 
   return (
     <div className="h-full w-full relative">
@@ -132,7 +158,22 @@ export default function MapView({ workshops, userLocation, selected, onSelect })
         ))}
 
         {!route && <FlyTo target={selected} />}
+        {userLocation && route && <FlyToUser location={userLocation} />}
       </MapContainer>
+
+      {/* Tombol Lokasi Saya */}
+      <button
+        className={`locate-btn ${locating ? 'locate-btn--loading' : ''}`}
+        onClick={handleLocate}
+        disabled={locating}
+        title="Perbarui lokasi saya"
+      >
+        {locating
+          ? <span className="route-spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+          : <Navigation size={16} />
+        }
+        <span>{locating ? 'Mencari…' : 'Lokasi Saya'}</span>
+      </button>
 
       {/* Route info panel */}
       {selected && (

@@ -1,4 +1,4 @@
-import { MapPin, Navigation, Wrench, ChevronRight, ArrowUpDown, Route, Tag } from 'lucide-react'
+import { MapPin, Navigation, Wrench, ChevronRight, ArrowUpDown, Route, Tag, LogOut, User } from 'lucide-react'
 
 const PLACEHOLDER = 'https://placehold.co/400x200/1e293b/f97316?text=SpotBan'
 
@@ -7,7 +7,7 @@ const SORT_OPTIONS = [
   { value: 'price',    label: 'Termurah', icon: Tag   },
 ]
 
-export default function Sidebar({ workshops, selected, onSelect, userLocation, loading, sortBy, onSortChange }) {
+export default function Sidebar({ workshops, selected, onSelect, userLocation, loading, sortBy, onSortChange, user, onSignOut }) {
   return (
     <aside className="sidebar">
       {/* Header */}
@@ -19,9 +19,19 @@ export default function Sidebar({ workshops, selected, onSelect, userLocation, l
             <p className="logo-sub">Tambal Ban Terdekat</p>
           </div>
         </div>
-        <div className="gps-badge">
-          <Navigation size={12} />
-          <span>{userLocation ? 'GPS Aktif' : 'Mencari GPS…'}</span>
+        <div className="header-right">
+          <div className="gps-badge">
+            <Navigation size={12} />
+            <span>{userLocation ? 'GPS Aktif' : 'Mencari GPS…'}</span>
+          </div>
+          <button
+            className="logout-btn"
+            onClick={onSignOut}
+            title={`Keluar (${user?.email})`}
+          >
+            <LogOut size={14} />
+            <span>Keluar</span>
+          </button>
         </div>
       </div>
 

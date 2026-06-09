@@ -5,7 +5,6 @@ import 'leaflet/dist/leaflet.css'
 import { useRoute } from '../hooks/useRoute'
 import { Navigation } from 'lucide-react'
 
-// Fix default icon path broken by Vite bundling
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -50,69 +49,97 @@ const shopIconActive = L.divIcon({
   popupAnchor: [0, -38],
 })
 
-// ── FlyToTarget: fly ke koordinat tertentu, hanya saat targetKey berubah ──
-// Menggunakan ref untuk menghindari fly ulang pada re-render biasa
-function FlyToTarget({ lat, lng, zoom = 16, targetKey }) {
-  const map       = useMap()
-  const prevKey   = useRef(null)
-  useEffect(() => {
-    if (!lat || !lng) return
-    if (prevKey.current === targetKey) return   // sudah fly ke target ini
-    prevKey.current = targetKey
-    map.flyTo([lat, lng], zoom, { duration: 1.1 })
-  }, [targetKey, lat, lng, zoom, map])
-  return null
-}
+// ─────────────────────────────────────────────────────────────
+// MapController: satu-satunya komponen yang menggerakkan kamera.
+// Dipasang di dalam MapContainer sehingga bisa akses useMap().
+// Menggunakan ref untuk mencegah fly berulang ke target yang sama.
+// ─────────────────────────────────────────────────────────────
+function MapController({ userLocation, selected, route }) {
+  const map           = useRef(null)
+  const mapInstance   = useMap()
+  const lastUserKey   = useRef(null)   // key GPS terakhir yang sudah di-fly
+  const lastSelectKey = useRef(null)   // key bengkel terakhir yang sudah di-fly
 
-// ── FitRoute: fit bounds agar rute penuh terlihat ──
-function FitRoute({ coordinates, userLocation, selected }) {
-  const map     = useMap()
-  const prevKey = useRef(null)
+  // Simpan instance peta
   useEffect(() => {
-    if (!coordinates?.length || !userLocation || !selected) return
+    map.current = mapInstance
+  }, [mapInstance])
+
+  // ── Fly ke lokasi user saat GPS pertama kali dapat / tombol diperbarui ──
+  useEffect(() => {
+    if (!userLocation) return
+    const key = `${userLocation.lat.toFixed(5)},${userLocation.lng.toFixed(5)}`
+    if (lastUserKey.current === key) return   // sudah di sini, jangan fly lagi
+    lastUserKey.current = key
+
+    // Hanya fly ke user kalau tidak sedang ada bengkel dipilih + rute
+    if (!selected) {
+      mapInstance.flyTo([userLocation.lat, userLocation.lng], 15, { duration: 1.2 })
+    }
+  }, [userLocation])  // eslint-disable-line
+
+  // ── Fly ke bengkel dipilih (hanya saat rute belum ada) ──
+  useEffect(() => {
+    if (!selected) { lastSelectKey.current = null; return }
     const key = selected.id
-    if (prevKey.current === key) return
-    prevKey.current = key
+    if (lastSelectKey.current === key) return
+    lastSelectKey.current = key
+
+    if (!route) {
+      // Belum ada rute — fly dulu ke bengkel
+      mapInstance.flyTo([selected.latitude, selected.longitude], 16, { duration: 1.1 })
+    }
+  }, [selected?.id])  // eslint-disable-line
+
+  // ── Fit bounds saat rute baru muncul untuk bengkel ini ──
+  const lastRouteKey = useRef(null)
+  useEffect(() => {
+    if (!route || !userLocation || !selected) return
+    const key = selected.id
+    if (lastRouteKey.current === key) return
+    lastRouteKey.current = key
+
     const bounds = L.latLngBounds([
       [userLocation.lat, userLocation.lng],
       [selected.latitude, selected.longitude],
-      ...coordinates,
+      ...route.coordinates,
     ])
-    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, duration: 1 })
-  }, [coordinates, selected?.id, map])
+    mapInstance.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, duration: 1 })
+  }, [route, selected?.id])  // eslint-disable-line
+
   return null
 }
 
 export default function MapView({ workshops, userLocation, selected, onSelect, onLocate, onClearRoute }) {
-  const [locating, setLocating]         = useState(false)
-  // Simpan userLocation pertama kali untuk initial center — tidak berubah saat re-render
-  const initialCenter = userLocation
-    ? [userLocation.lat, userLocation.lng]
-    : [-6.2088, 106.8456]
-
+  const [locating, setLocating] = useState(false)
   const { route, loadingRoute } = useRoute(userLocation, selected)
 
-  // ── Perbarui lokasi GPS ──
   function handleLocate() {
     setLocating(true)
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        const loc = { lat: coords.latitude, lng: coords.longitude }
-        onLocate(loc)
+        onLocate({ lat: coords.latitude, lng: coords.longitude })
         setLocating(false)
       },
       (err) => {
         console.warn('GPS error:', err)
         setLocating(false)
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        // maximumAge: 0 → paksa ambil posisi BARU, bukan cache
+        maximumAge: 0,
+      }
     )
   }
 
   return (
     <div className="h-full w-full relative">
       <MapContainer
-        center={initialCenter}
+        // center hanya dipakai sebagai titik awal sebelum GPS siap.
+        // Setelah GPS dapat, MapController yang menggerakkan kamera.
+        center={[-6.2088, 106.8456]}
         zoom={13}
         className="h-full w-full"
         zoomControl={false}
@@ -124,7 +151,14 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
           maxZoom={19}
         />
 
-        {/* ── Rute polyline — tetap tampil selama selected ada ── */}
+        {/* Satu komponen pengendali kamera */}
+        <MapController
+          userLocation={userLocation}
+          selected={selected}
+          route={route}
+        />
+
+        {/* Rute — tetap tampil selama selected ada */}
         {route && (
           <>
             <Polyline
@@ -135,16 +169,9 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
               positions={route.coordinates}
               pathOptions={{ color: '#f97316', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }}
             />
-            {/* Fit bounds hanya saat rute pertama kali muncul untuk bengkel ini */}
-            <FitRoute
-              coordinates={route.coordinates}
-              userLocation={userLocation}
-              selected={selected}
-            />
           </>
         )}
 
-        {/* ── Marker lokasi user ── */}
         {userLocation && (
           <Marker position={[userLocation.lat, userLocation.lng]} icon={userIcon}>
             <Popup>
@@ -153,7 +180,6 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
           </Marker>
         )}
 
-        {/* ── Marker semua bengkel ── */}
         {workshops.map((w) => (
           <Marker
             key={w.id}
@@ -164,29 +190,9 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
             <Popup><WorkshopPopup workshop={w} /></Popup>
           </Marker>
         ))}
-
-        {/* Fly ke lokasi user saat GPS pertama kali tersedia atau diperbarui */}
-        {userLocation && !selected && (
-          <FlyToTarget
-            lat={userLocation.lat}
-            lng={userLocation.lng}
-            zoom={14}
-            targetKey={`user-${userLocation.lat.toFixed(5)}-${userLocation.lng.toFixed(5)}`}
-          />
-        )}
-
-        {/* Fly ke bengkel yang dipilih (hanya saat belum ada rute) */}
-        {selected && !route && (
-          <FlyToTarget
-            lat={selected.latitude}
-            lng={selected.longitude}
-            zoom={16}
-            targetKey={`ws-${selected.id}`}
-          />
-        )}
       </MapContainer>
 
-      {/* ── Tombol Lokasi Saya ── */}
+      {/* Tombol Lokasi Saya */}
       <button
         className={`locate-btn ${locating ? 'locate-btn--loading' : ''}`}
         onClick={handleLocate}
@@ -200,7 +206,7 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
         <span>{locating ? 'Mencari…' : 'Lokasi Saya'}</span>
       </button>
 
-      {/* ── Route info panel ── */}
+      {/* Route info panel */}
       {selected && (
         <div className="route-panel">
           {loadingRoute ? (
@@ -213,7 +219,6 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
               <div className="route-panel__dest">
                 <span className="route-panel__icon">🔧</span>
                 <span className="route-panel__name">{selected.name}</span>
-                {/* Tombol X untuk hapus rute */}
                 <button
                   onClick={onClearRoute}
                   style={{

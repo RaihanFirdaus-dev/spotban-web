@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -9,8 +9,8 @@ import { Navigation } from 'lucide-react'
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconUrl:       'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl:     'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 })
 
 const userIcon = L.divIcon({
@@ -50,52 +50,55 @@ const shopIconActive = L.divIcon({
   popupAnchor: [0, -38],
 })
 
-// Fly to selected workshop (only when no route yet)
-function FlyTo({ target }) {
-  const map = useMap()
+// ── FlyToTarget: fly ke koordinat tertentu, hanya saat targetKey berubah ──
+// Menggunakan ref untuk menghindari fly ulang pada re-render biasa
+function FlyToTarget({ lat, lng, zoom = 16, targetKey }) {
+  const map       = useMap()
+  const prevKey   = useRef(null)
   useEffect(() => {
-    if (target) map.flyTo([target.latitude, target.longitude], 16, { duration: 1 })
-  }, [target, map])
+    if (!lat || !lng) return
+    if (prevKey.current === targetKey) return   // sudah fly ke target ini
+    prevKey.current = targetKey
+    map.flyTo([lat, lng], zoom, { duration: 1.1 })
+  }, [targetKey, lat, lng, zoom, map])
   return null
 }
 
-// Fly to user location after locate button
-function FlyToUser({ location }) {
-  const map = useMap()
-  useEffect(() => {
-    if (location) map.flyTo([location.lat, location.lng], 15, { duration: 1.2 })
-  }, [location, map])
-  return null
-}
-
-// Fit map bounds to show full route
+// ── FitRoute: fit bounds agar rute penuh terlihat ──
 function FitRoute({ coordinates, userLocation, selected }) {
-  const map = useMap()
+  const map     = useMap()
+  const prevKey = useRef(null)
   useEffect(() => {
-    if (!coordinates || !userLocation || !selected) return
+    if (!coordinates?.length || !userLocation || !selected) return
+    const key = selected.id
+    if (prevKey.current === key) return
+    prevKey.current = key
     const bounds = L.latLngBounds([
       [userLocation.lat, userLocation.lng],
       [selected.latitude, selected.longitude],
       ...coordinates,
     ])
     map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, duration: 1 })
-  }, [coordinates, map])
+  }, [coordinates, selected?.id, map])
   return null
 }
 
-export default function MapView({ workshops, userLocation, selected, onSelect, onLocate }) {
-  const [locating, setLocating] = useState(false)
-  const center = userLocation
+export default function MapView({ workshops, userLocation, selected, onSelect, onLocate, onClearRoute }) {
+  const [locating, setLocating]         = useState(false)
+  // Simpan userLocation pertama kali untuk initial center — tidak berubah saat re-render
+  const initialCenter = userLocation
     ? [userLocation.lat, userLocation.lng]
     : [-6.2088, 106.8456]
 
   const { route, loadingRoute } = useRoute(userLocation, selected)
 
+  // ── Perbarui lokasi GPS ──
   function handleLocate() {
     setLocating(true)
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        onLocate({ lat: coords.latitude, lng: coords.longitude })
+        const loc = { lat: coords.latitude, lng: coords.longitude }
+        onLocate(loc)
         setLocating(false)
       },
       (err) => {
@@ -109,7 +112,7 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
   return (
     <div className="h-full w-full relative">
       <MapContainer
-        center={center}
+        center={initialCenter}
         zoom={13}
         className="h-full w-full"
         zoomControl={false}
@@ -121,7 +124,7 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
           maxZoom={19}
         />
 
-        {/* Route polyline */}
+        {/* ── Rute polyline — tetap tampil selama selected ada ── */}
         {route && (
           <>
             <Polyline
@@ -132,10 +135,16 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
               positions={route.coordinates}
               pathOptions={{ color: '#f97316', weight: 4, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }}
             />
-            <FitRoute coordinates={route.coordinates} userLocation={userLocation} selected={selected} />
+            {/* Fit bounds hanya saat rute pertama kali muncul untuk bengkel ini */}
+            <FitRoute
+              coordinates={route.coordinates}
+              userLocation={userLocation}
+              selected={selected}
+            />
           </>
         )}
 
+        {/* ── Marker lokasi user ── */}
         {userLocation && (
           <Marker position={[userLocation.lat, userLocation.lng]} icon={userIcon}>
             <Popup>
@@ -144,6 +153,7 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
           </Marker>
         )}
 
+        {/* ── Marker semua bengkel ── */}
         {workshops.map((w) => (
           <Marker
             key={w.id}
@@ -151,17 +161,32 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
             icon={selected?.id === w.id ? shopIconActive : shopIcon}
             eventHandlers={{ click: () => onSelect(w) }}
           >
-            <Popup>
-              <WorkshopPopup workshop={w} />
-            </Popup>
+            <Popup><WorkshopPopup workshop={w} /></Popup>
           </Marker>
         ))}
 
-        {!route && <FlyTo target={selected} />}
-        {userLocation && route && <FlyToUser location={userLocation} />}
+        {/* Fly ke lokasi user saat GPS pertama kali tersedia atau diperbarui */}
+        {userLocation && !selected && (
+          <FlyToTarget
+            lat={userLocation.lat}
+            lng={userLocation.lng}
+            zoom={14}
+            targetKey={`user-${userLocation.lat.toFixed(5)}-${userLocation.lng.toFixed(5)}`}
+          />
+        )}
+
+        {/* Fly ke bengkel yang dipilih (hanya saat belum ada rute) */}
+        {selected && !route && (
+          <FlyToTarget
+            lat={selected.latitude}
+            lng={selected.longitude}
+            zoom={16}
+            targetKey={`ws-${selected.id}`}
+          />
+        )}
       </MapContainer>
 
-      {/* Tombol Lokasi Saya */}
+      {/* ── Tombol Lokasi Saya ── */}
       <button
         className={`locate-btn ${locating ? 'locate-btn--loading' : ''}`}
         onClick={handleLocate}
@@ -175,7 +200,7 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
         <span>{locating ? 'Mencari…' : 'Lokasi Saya'}</span>
       </button>
 
-      {/* Route info panel */}
+      {/* ── Route info panel ── */}
       {selected && (
         <div className="route-panel">
           {loadingRoute ? (
@@ -188,6 +213,16 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
               <div className="route-panel__dest">
                 <span className="route-panel__icon">🔧</span>
                 <span className="route-panel__name">{selected.name}</span>
+                {/* Tombol X untuk hapus rute */}
+                <button
+                  onClick={onClearRoute}
+                  style={{
+                    marginLeft: 'auto', background: 'none', border: 'none',
+                    cursor: 'pointer', color: '#94a3b8', fontSize: 18,
+                    lineHeight: 1, padding: '0 2px',
+                  }}
+                  title="Hapus rute"
+                >×</button>
               </div>
               <div className="route-panel__stats">
                 <div className="route-stat">
@@ -202,7 +237,13 @@ export default function MapView({ workshops, userLocation, selected, onSelect, o
               </div>
             </>
           ) : (
-            <div className="route-panel__loading">⚠️ Rute tidak tersedia</div>
+            <div className="route-panel__loading" style={{ justifyContent: 'space-between' }}>
+              <span>⚠️ Rute tidak tersedia</span>
+              <button
+                onClick={onClearRoute}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 18 }}
+              >×</button>
+            </div>
           )}
         </div>
       )}
